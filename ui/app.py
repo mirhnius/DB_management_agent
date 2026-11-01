@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import pandas as pd
 import requests
@@ -74,12 +75,15 @@ def call_backend(method_path: str, payload: dict, spinner_text: str = "Working o
         return {"ok": False, "text": f"Error contacting backend: {e}", "approval_info": None, "preview": None}
 
 
-def submit_chat_message(message: str) -> None:
-    """Send a message as if typed into the chat box; appends both sides to history."""
+def submit_chat_message(message: str, shown_as: str | None = None) -> None:
+    """Send a message as if typed into the chat box; appends both sides to history.
+
+    shown_as replaces the message in the chat history, e.g. to hide file paths.
+    """
     st.session_state.messages.append(
         {
             "role": "user",
-            "content": message,
+            "content": shown_as or message,
             "preview": None,
             "approval_info": None,
             "resolved": True,
@@ -114,7 +118,7 @@ def handle_insert_upload(uploaded_file, db_path: str, invalid_output_path: str) 
         f"database at {db_path}. Save any invalid records found during "
         f"validation to {invalid_output_path}, and return any skipped/invalid rows."
     )
-    submit_chat_message(message)
+    submit_chat_message(message, shown_as=f"📎 Insert the uploaded file **{uploaded_file.name}**")
     st.rerun()
 
 
@@ -133,6 +137,18 @@ def hide_leading_json(text: str) -> str:
             return text
         rest = body[end:].lstrip().removeprefix("```").lstrip()
     return rest
+
+
+# A path inside the home folder, not including trailing punctuation such as a full stop.
+HOME_PATH = re.compile(re.escape(os.path.expanduser("~")) + r"/[^\s`'\"]*[^\s`'\".,;:)]")
+
+
+def hide_file_paths(text: str) -> str:
+    """Show only the file name for paths in the home folder, which reveal the username.
+
+    e.g. 'Saved to /Users/name/project/data/invalid_rows.csv.' -> 'Saved to invalid_rows.csv.'
+    """
+    return HOME_PATH.sub(lambda m: os.path.basename(m.group(0)), text)
 
 
 def usage_caption(usage: dict) -> str:
@@ -329,7 +345,9 @@ def render_deletion_result(deletion_result: dict) -> None:
 
 for i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
-        content = hide_leading_json(msg["content"]) if msg["role"] == "assistant" else msg["content"]
+        content = msg["content"]
+        if msg["role"] == "assistant":
+            content = hide_file_paths(hide_leading_json(content))
         if content:
             st.write(content)
         if msg.get("approval_info") and not msg.get("resolved"):
